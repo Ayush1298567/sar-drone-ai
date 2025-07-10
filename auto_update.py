@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+"""
+Local Auto-Update Script for SAR Drone AI System
+Automatically commits and pushes changes to GitHub repository
+"""
+
+import os
+import subprocess
+import time
+import logging
+from datetime import datetime
+from pathlib import Path
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('auto_update.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+class AutoUpdater:
+    def __init__(self, repo_path: str = ".", update_interval: int = 120):
+        """
+        Initialize auto-updater
+        
+        Args:
+            repo_path: Path to the git repository
+            update_interval: Update interval in seconds (default: 2 minutes)
+        """
+        self.repo_path = Path(repo_path).resolve()
+        self.update_interval = update_interval
+        self.last_commit_hash = None
+        
+        # Change to repository directory
+        os.chdir(self.repo_path)
+        
+        # Verify this is a git repository
+        if not self._is_git_repo():
+            raise ValueError(f"Not a git repository: {self.repo_path}")
+        
+        logger.info(f"Auto-updater initialized for: {self.repo_path}")
+        logger.info(f"Update interval: {self.update_interval} seconds")
+    
+    def _is_git_repo(self) -> bool:
+        """Check if current directory is a git repository"""
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--git-dir"],
+                capture_output=True,
+                text=True,
+                cwd=self.repo_path
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+    
+    def _get_current_commit_hash(self) -> str:
+        """Get current commit hash"""
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                cwd=self.repo_path
+            )
+            return result.stdout.strip()
+        except Exception as e:
+            logger.error(f"Failed to get commit hash: {e}")
+            return ""
+    
+    def _check_for_changes(self) -> bool:
+        """Check if there are any uncommitted changes"""
+        try:
+            # Check for modified files
+            result = subprocess.run(
+                ["git", "status", "--porcelain"],
+                capture_output=True,
+                text=True,
+                cwd=self.repo_path
+            )
+            
+            if result.stdout.strip():
+                logger.info("Changes detected:")
+                for line in result.stdout.strip().split('\n'):
+                    if line:
+                        logger.info(f"  {line}")
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Failed to check for changes: {e}")
+            return False
+    
+    def _commit_and_push(self) -> bool:
+        """Commit and push changes"""
+        try:
+            # Add all changes
+            logger.info("Adding changes...")
+            subprocess.run(
+                ["git", "add", "-A"],
+                check=True,
+                cwd=self.repo_path
+            )
+            
+            # Commit changes
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            commit_message = f"Auto-update: {timestamp}"
+            
+            logger.info(f"Committing changes: {commit_message}")
+            subprocess.run(
+                ["git", "commit", "-m", commit_message],
+                check=True,
+                cwd=self.repo_path
+            )
+            
+            # Push to remote
+            logger.info("Pushing to remote...")
+            subprocess.run(
+                ["git", "push", "origin", "main"],
+                check=True,
+                cwd=self.repo_path
+            )
+            
+            logger.info("Successfully committed and pushed changes")
+            return True
+            
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Git operation failed: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error during commit/push: {e}")
+            return False
+    
+    def run(self):
+        """Run the auto-updater continuously"""
+        logger.info("Starting auto-updater...")
+        
+        try:
+            while True:
+                current_hash = self._get_current_commit_hash()
+                
+                # Check if we have a new commit (to avoid unnecessary work)
+                if current_hash != self.last_commit_hash:
+                    self.last_commit_hash = current_hash
+                    
+                    # Check for changes
+                    if self._check_for_changes():
+                        logger.info("Changes found, committing...")
+                        if self._commit_and_push():
+                            logger.info("Update completed successfully")
+                        else:
+                            logger.error("Update failed")
+                    else:
+                        logger.debug("No changes detected")
+                
+                # Wait for next update
+                logger.debug(f"Waiting {self.update_interval} seconds until next check...")
+                time.sleep(self.update_interval)
+                
+        except KeyboardInterrupt:
+            logger.info("Auto-updater stopped by user")
+        except Exception as e:
+            logger.error(f"Auto-updater error: {e}")
+            raise
+
+def main():
+    """Main function"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Auto-update SAR Drone AI repository")
+    parser.add_argument(
+        "--path", 
+        default=".", 
+        help="Path to git repository (default: current directory)"
+    )
+    parser.add_argument(
+        "--interval", 
+        type=int, 
+        default=120, 
+        help="Update interval in seconds (default: 120)"
+    )
+    parser.add_argument(
+        "--dry-run", 
+        action="store_true", 
+        help="Check for changes without committing"
+    )
+    
+    args = parser.parse_args()
+    
+    try:
+        updater = AutoUpdater(args.path, args.interval)
+        
+        if args.dry_run:
+            logger.info("Dry run mode - checking for changes only")
+            if updater._check_for_changes():
+                logger.info("Changes would be committed")
+            else:
+                logger.info("No changes detected")
+        else:
+            updater.run()
+            
+    except Exception as e:
+        logger.error(f"Failed to start auto-updater: {e}")
+        return 1
+    
+    return 0
+
+if __name__ == "__main__":
+    exit(main()) 
